@@ -1,6 +1,5 @@
 using Microsoft.EntityFrameworkCore;
 using Infrastructure.DataContext;
-using Microsoft.EntityFrameworkCore;
 using API.DependancyInjection;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -11,6 +10,8 @@ builder.Services.AddControllers();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 
 builder.Services.AddCategoryMappings();
 builder.Services.AddProductMappings();

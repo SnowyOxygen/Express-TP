@@ -1,45 +1,61 @@
-﻿using Infrastructure.Repositories.Interfaces;
+﻿using Infrastructure.DataContext;
+using Infrastructure.Repositories.Interfaces;
 
 namespace Business.Order.CreateOrderUseCase
 {
-    public class CreateOrderUseCase(
-        IOrderRepository repository,
-        IOrderLineRepository orderLineRepository,
-        IProductRepository productRepository) : ICreateOrderUseCase
+    public class CreateOrderUseCase : ICreateOrderUseCase
     {
-        private readonly IOrderRepository _repository = repository;
-        private readonly IOrderLineRepository _orderLineRepository = orderLineRepository;
-        private readonly IProductRepository _productRepository = productRepository;
+        private readonly IUnitOfWork _unitOfWork;
+        private readonly IOrderRepository _orderRepository;
+        private readonly IOrderLineRepository _orderLineRepository;
+        private readonly IProductRepository _productRepository;
+
+        public CreateOrderUseCase(IUnitOfWork unitOfWork)
+        {
+            _unitOfWork = unitOfWork;
+            _orderRepository = unitOfWork.Orders;
+            _orderLineRepository = unitOfWork.OrderLines;
+            _productRepository = unitOfWork.Products;
+        }
 
         public async Task<long> CreateAsync(CreateOrderRequest request)
         {
-            // TODO: implement unit of work in case of failure during order line creation
             if (request.OrderLines.Count() > 5) throw new InvalidOperationException("Too many products selected.");
 
-            Model.DAO.Order order = request.ToDao();
-            order = await _repository.CreateAsync(order);
+            await _unitOfWork.BeginTransactionAsync();
 
-            await CreateOrderLinesAsync(request, order);
+            try
+            {
+                Model.DAO.Order order = request.ToDao();
+                order = await _orderRepository.CreateAsync(order);
 
-            return order.Id;
+                await CreateOrderLinesAsync(request, order);
+                
+                await _unitOfWork.CommitAsync();
+
+                return order.Id;
+            }
+            catch
+            {
+                await _unitOfWork.RollbackAsync();
+
+                throw;
+            }
         }
 
         private async Task CreateOrderLinesAsync(CreateOrderRequest request, Model.DAO.Order order)
         {
-            // Validate order lines
             IEnumerable<long> productIds = request.OrderLines.Select(ol => ol.ProductId);
             IEnumerable<Model.DAO.Product> products = await _productRepository.GetByIdsAsync(productIds);
             IEnumerable<Model.DAO.OrderLine> orderLines = [];
 
             foreach (long productId in productIds)
             {
-                // Check if product exists
                 Model.DAO.Product? product = products.FirstOrDefault(p => p.Id == productId);
                 CreateOrderLine createOrderLine = request.OrderLines.First(ol => ol.ProductId == productId);
 
                 await ValidateOrderLine(productId, product, createOrderLine);
 
-                // Create order line and add to list
                 int unitPrice = product.SaleActive ? product.SalePrice : product.Price;
                 Model.DAO.OrderLine orderLine = createOrderLine.ToDao(order.Id, unitPrice);
                 orderLines = orderLines.Append(orderLine);
@@ -55,7 +71,6 @@ namespace Business.Order.CreateOrderUseCase
                 throw new InvalidOperationException($"Product with id {productId} not found.");
             }
 
-            // Check if stock is sufficient
             int currentStock = await CalculateProductStockAsync(product);
             if (currentStock - createOrderLine.Quantity < 0)
             {
